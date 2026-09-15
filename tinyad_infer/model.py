@@ -14,7 +14,6 @@ import torch.nn.functional as F
 from .components import (
     FactorizedLocalRefinement,
     FeaturePredictor,
-    FrequencyContext,
     SaliencyProposals,
     SpectralMapper,
 )
@@ -33,14 +32,13 @@ class DetectorConfig:
     gate_offset: float = 0.40
     gate_sharpness: float = 4.0
     gate_power: float = 1.10
-    frequency_weight: float = 0.20
 
 
 def _safe_checkpoint(path: str | Path) -> dict[str, Any]:
     checkpoint = torch.load(Path(path), map_location="cpu", weights_only=True)
     if not isinstance(checkpoint, dict):
         raise TypeError("The model checkpoint must contain a tensor dictionary")
-    allowed = {"predictor", "local_refiner", "frequency_context", "frequency_branch"}
+    allowed = {"predictor", "local_refiner"}
     unexpected = set(checkpoint) - allowed
     if unexpected:
         raise ValueError(f"Unexpected checkpoint sections: {sorted(unexpected)}")
@@ -77,7 +75,6 @@ class AnomalyDetector(nn.Module):
         factorized_local_state: bool = False,
         local_has_rgb_state: bool = True,
         local_has_spectral_state: bool = False,
-        has_frequency_state: bool = False,
         config: DetectorConfig | None = None,
     ) -> None:
         super().__init__()
@@ -102,11 +99,9 @@ class AnomalyDetector(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Conv2d(256, 1, kernel_size=1),
             )
-        self.frequency_context = FrequencyContext()
         self.local_uses_frequency = (
             local_has_spectral_state if self.factorized_local_state else local_input_channels == 4
         )
-        self.frequency_context_enabled = bool(has_frequency_state)
 
     @classmethod
     def from_checkpoint(
@@ -131,20 +126,16 @@ class AnomalyDetector(nn.Module):
             has_rgb = True
             has_spectral = int(first_weight.shape[1]) == 4
             local_channels = int(first_weight.shape[1])
-        frequency_state = state.get("frequency_context", state.get("frequency_branch"))
         model = cls(
             backbone=backbone,
             local_input_channels=local_channels,
             factorized_local_state=factorized,
             local_has_rgb_state=has_rgb,
             local_has_spectral_state=has_spectral,
-            has_frequency_state=frequency_state is not None,
             config=config,
         )
         model.predictor.load_state_dict(state["predictor"], strict=True)
         model.local_refiner.load_state_dict(state["local_refiner"], strict=True)
-        if model.frequency_context_enabled:
-            model.frequency_context.load_state_dict(frequency_state, strict=True)
         return model.eval()
 
     def _features(self, images: torch.Tensor) -> torch.Tensor:
@@ -268,25 +259,6 @@ class AnomalyDetector(nn.Module):
         ).clamp_min(1e-8)
         return patch_scores + self.config.refinement_weight * local_scores * score_range, proposals
 
-    def _frequency_refinement(
-        self,
-        images: torch.Tensor,
-        patch_scores: torch.Tensor,
-        side: int,
-    ) -> torch.Tensor:
-        if not self.frequency_context_enabled:
-            return patch_scores
-        logits, _ = self.frequency_context(images)
-        delta = self.frequency_context.normalized_delta(logits)
-        delta = F.interpolate(
-            delta, size=(side, side), mode="bilinear", align_corners=False
-        ).flatten(1)
-        score_range = (
-            patch_scores.max(dim=1, keepdim=True).values
-            - patch_scores.min(dim=1, keepdim=True).values
-        ).clamp_min(1e-8)
-        return patch_scores + self.config.frequency_weight * delta * score_range
-
     @torch.inference_mode()
     def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         if images.ndim != 4 or images.shape[1] != 3:
@@ -295,7 +267,6 @@ class AnomalyDetector(nn.Module):
         patch_scores, proposals = self._local_refinement(
             images, coarse_map, patch_scores, side
         )
-        patch_scores = self._frequency_refinement(images, patch_scores, side)
         anomaly_map = F.interpolate(
             patch_scores.reshape(images.shape[0], 1, side, side),
             size=images.shape[-2:],

@@ -5,8 +5,8 @@ import unittest
 import torch
 from torch import nn
 
-from foundad_infer.model import AnomalyDetector, DetectorConfig
-from foundad_infer.scoring import aggregate_image_score
+from tinyad_infer.model import AnomalyDetector, DetectorConfig
+from tinyad_infer.scoring import aggregate_image_score
 
 
 class StubBackbone(nn.Module):

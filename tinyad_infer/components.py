@@ -268,28 +268,3 @@ class FactorizedLocalRefinement(nn.Module):
             raise RuntimeError("No local input path is available")
         hidden = hidden + self.stem_bias.reshape(1, -1, 1, 1)
         return self.body(hidden)
-
-
-class FrequencyContext(nn.Module):
-    def __init__(self, hidden_channels: int = 16) -> None:
-        super().__init__()
-        self.mapper = SpectralMapper(high_quantile=0.98)
-        self.head = nn.Sequential(
-            nn.Conv2d(1, hidden_channels, kernel_size=3, padding=1),
-            nn.GELU(),
-            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
-            nn.GELU(),
-            nn.Conv2d(hidden_channels, 1, kernel_size=1),
-        )
-
-    def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        spectral_map = self.mapper(images)
-        return self.head(spectral_map), spectral_map
-
-    @staticmethod
-    def normalized_delta(logits: torch.Tensor) -> torch.Tensor:
-        probabilities = torch.sigmoid(logits.float())
-        center = torch.quantile(probabilities.flatten(1), 0.50, dim=1).reshape(-1, 1, 1, 1)
-        delta = (probabilities - center).clamp_min(0.0)
-        scale = torch.quantile(delta.flatten(1), 0.95, dim=1).reshape(-1, 1, 1, 1)
-        return (delta / scale.clamp_min(1e-6)).clamp(0.0, 1.0)
