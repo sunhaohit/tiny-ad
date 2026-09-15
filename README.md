@@ -35,6 +35,24 @@ python -m pip install -r requirements.txt
 The DINOv3 backbone is not redistributed here. Obtain its repository and
 pretrained weights from the official project and pass both paths explicitly.
 
+## Dataset
+
+The Tiny-AD dataset package contains the complete training images, test images,
+pixel-level ground-truth masks, and the script used to reproduce the fixed
+1-shot, 2-shot, and 4-shot training subsets.
+
+- Download: [Tiny-AD-Dataset.zip](https://pan.baidu.com/s/1ftlMgpKjMpTN9fqXFRPmeQ?pwd=8798)
+- Extraction code: `8798`
+
+After extraction, the full dataset is located at
+`Tiny-AD-Dataset/Tiny-AD/<category>/`. To recreate the paper experiment's
+few-shot subsets, run:
+
+```bash
+cd Tiny-AD-Dataset
+python prepare_few_shot.py --source-root Tiny-AD --output-root . --shots 1 2 4
+```
+
 ## Run inference
 
 ```bash
